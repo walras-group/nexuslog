@@ -1,4 +1,10 @@
-"""Fast async logger with Rust backend."""
+"""Fast async logger with Rust backend.
+
+Usage:
+    import nexuslog as logging
+    logging.basicConfig(level=logging.INFO)
+    logging.info("Hello, world!")
+"""
 
 from ._logger import (
     PyLevel as Level,
@@ -7,21 +13,46 @@ from ._logger import (
     basic_config as _basic_config,
 )
 
+# Standard logging level constants
+TRACE = Level.Trace
+DEBUG = Level.Debug
+INFO = Level.Info
+WARNING = Level.Warning
+ERROR = Level.Error
+
 __all__ = [
     "Level",
     "Logger",
     "basicConfig",
     "getLogger",
+    "TRACE",
+    "DEBUG",
+    "INFO",
+    "WARNING",
+    "ERROR",
+    "trace",
+    "debug",
+    "info",
+    "warning",
+    "error",
 ]
 
-_DEFAULT_LEVEL = Level.Info
+_DEFAULT_LEVEL = INFO
+_root_logger: "Logger | None" = None
 
 
-def basicConfig(log_file: str | None = None, level: Level = Level.Info) -> None:
-    """Configure the default log file and level for getLogger()."""
-    global _DEFAULT_LEVEL
-    _basic_config(log_file)
+def basicConfig(filename: str | None = None, level: Level = INFO) -> None:
+    """Configure the root logger.
+
+    Args:
+        filename: Optional file path for log output. If None, logs to stdout.
+        level: Minimum log level to record. Default is INFO.
+    """
+    global _DEFAULT_LEVEL, _root_logger
+    _basic_config(filename)
     _DEFAULT_LEVEL = level
+    # Create root logger
+    _root_logger = getLogger("root", level)
 
 
 class Logger:
@@ -71,3 +102,36 @@ def getLogger(name: str, level: Level | None = None) -> Logger:
     logger = Logger.__new__(Logger)
     logger._logger = _get_logger(name, level)
     return logger
+
+
+def _get_root_logger() -> Logger:
+    """Get or create the root logger."""
+    global _root_logger
+    if _root_logger is None:
+        _root_logger = getLogger("root", _DEFAULT_LEVEL)
+    return _root_logger
+
+
+def trace(message: str) -> None:
+    """Log a trace message to the root logger."""
+    _get_root_logger().trace(message)
+
+
+def debug(message: str) -> None:
+    """Log a debug message to the root logger."""
+    _get_root_logger().debug(message)
+
+
+def info(message: str) -> None:
+    """Log an info message to the root logger."""
+    _get_root_logger().info(message)
+
+
+def warning(message: str) -> None:
+    """Log a warning message to the root logger."""
+    _get_root_logger().warning(message)
+
+
+def error(message: str) -> None:
+    """Log an error message to the root logger."""
+    _get_root_logger().error(message)
