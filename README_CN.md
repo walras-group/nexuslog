@@ -4,11 +4,11 @@
 ![Python](https://img.shields.io/badge/python-3.11%20|%203.12%20|%203.13-blue)
 ![Version](https://img.shields.io/pypi/v/nexuslog?color=blue)
 
-High-performance async logging library, compatible with Python standard logging API.
+高性能异步日志库，兼容 Python 标准 logging API。
 
-[中文文档](README_CN.md)
+[English](README.md)
 
-## Benchmark
+## 性能测试
 
 ```
 ------------------------------------------------------------
@@ -23,13 +23,13 @@ NexusLogger is 27.93x faster than Python logging
 NexusLogger is 10.51x faster than picologging
 ```
 
-## Installation
+## 安装
 
 ```bash
 pip install nexuslog
 ```
 
-## Quick Start
+## 快速开始
 
 ```python
 import nexuslog as logging
@@ -43,7 +43,7 @@ logging.error("This is an error")
 
 ## API
 
-### Log Levels
+### 日志级别
 
 ```python
 logging.TRACE
@@ -53,7 +53,7 @@ logging.WARNING
 logging.ERROR
 ```
 
-### Module-level Functions
+### 模块级函数
 
 ```python
 logging.basicConfig(filename=None, level=logging.INFO)
@@ -64,7 +64,7 @@ logging.warning(message)
 logging.error(message)
 ```
 
-### Logger Class
+### Logger 类
 
 ```python
 from nexuslog import Logger, Level
