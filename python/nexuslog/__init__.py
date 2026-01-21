@@ -17,7 +17,7 @@ from ._logger import (
 TRACE = Level.Trace
 DEBUG = Level.Debug
 INFO = Level.Info
-WARNING = Level.Warning
+WARNING = Level.Warn
 ERROR = Level.Error
 
 __all__ = [
