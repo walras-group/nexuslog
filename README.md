@@ -56,7 +56,7 @@ logging.ERROR
 ### Module-level Functions
 
 ```python
-logging.basicConfig(filename=None, level=logging.INFO)
+logging.basicConfig(filename=None, level=logging.INFO, unix_ts=False)
 logging.trace(message)
 logging.debug(message)
 logging.info(message)

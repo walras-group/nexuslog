@@ -29,7 +29,7 @@ struct Timestamp {
 #[derive(Debug)]
 struct LogEntry {
     ts: Timestamp,
-    name: Arc<str>,
+    name: Option<Arc<str>>,
     level: log::Level,
     msg: LogMessage,
 }
@@ -40,8 +40,8 @@ impl LogEntry {
         self.ts
     }
     #[inline]
-    pub fn name(&self) -> &str {
-        &self.name
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
     }
     #[inline]
     pub fn level(&self) -> log::Level {
@@ -118,6 +118,7 @@ struct Context<P: ToString + Send> {
     rx: Receiver<Action>,
     path: Option<P>,
     date: chrono::NaiveDate,
+    unix_ts: bool,
 }
 
 pub struct Handle {
@@ -141,7 +142,7 @@ impl Drop for Handle {
 
 struct Logger {
     tx: Sender<Action>,
-    name: Arc<str>,
+    name: Option<Arc<str>>,
 }
 
 impl log::Log for Logger {
@@ -166,7 +167,7 @@ impl log::Log for Logger {
 
         let entry = LogEntry {
             ts: cached_timestamp(),
-            name: Arc::clone(&self.name),
+            name: self.name.as_ref().map(Arc::clone),
             level: record.level(),
             msg,
         };
@@ -317,13 +318,21 @@ fn worker<P: ToString + Send>(mut ctx: Context<P>) -> Result<(), std::io::Error>
 
                 // Build the line with cached timestamp parts to reduce formatting per entry.
                 let mut line = String::with_capacity(entry.msg().len() + 128);
-                line.push_str(&cache.time_prefix);
-                use std::fmt::Write as _;
-                write!(&mut line, "{:06}", ts.micros).unwrap();
-                line.push_str(&cache.offset_prefix);
-                line.push_str(level);
-                line.push_str(" name=");
-                line.push_str(entry.name());
+                if ctx.unix_ts {
+                    line.push_str("time=");
+                    use std::fmt::Write as _;
+                    write!(&mut line, "{}.{:06} level={}", ts.secs, ts.micros, level).unwrap();
+                } else {
+                    line.push_str(&cache.time_prefix);
+                    use std::fmt::Write as _;
+                    write!(&mut line, "{:06}", ts.micros).unwrap();
+                    line.push_str(&cache.offset_prefix);
+                    line.push_str(level);
+                }
+                if let Some(name) = entry.name() {
+                    line.push_str(" name=");
+                    line.push_str(name);
+                }
                 line.push_str(" msg=\"");
                 line.push_str(entry.msg());
                 line.push_str("\"\n");
@@ -356,9 +365,13 @@ pub fn init<P: ToString + Send + 'static>(name: &str, path: Option<P>, level: Le
         rx,
         path,
         date: Local::now().date_naive(),
+        unix_ts: false,
     };
 
-    let logger = Logger { tx: tx.clone(), name: Arc::from(name) };
+    let logger = Logger {
+        tx: tx.clone(),
+        name: Some(Arc::from(name)),
+    };
 
     log::set_boxed_logger(Box::new(logger)).expect("error to init logger");
     log::set_max_level(level);
@@ -422,12 +435,13 @@ mod python {
     }
 
     impl SharedWriter {
-        fn new(path: Option<String>) -> Self {
+        fn new(path: Option<String>, unix_ts: bool) -> Self {
             let (tx, rx) = crossbeam_channel::bounded(CHANNEL_CAPACITY);
             let ctx = Context {
                 rx,
                 path,
                 date: Local::now().date_naive(),
+                unix_ts,
             };
             let thread = std::thread::spawn(move || {
                 if let Err(msg) = worker(ctx) {
@@ -466,6 +480,11 @@ mod python {
         &DEFAULT_PATH
     }
 
+    fn default_unix_ts_cell() -> &'static OnceLock<Mutex<bool>> {
+        static DEFAULT_UNIX_TS: OnceLock<Mutex<bool>> = OnceLock::new();
+        &DEFAULT_UNIX_TS
+    }
+
     fn default_path() -> Option<String> {
         default_path_cell()
             .get_or_init(|| Mutex::new(None))
@@ -474,9 +493,21 @@ mod python {
             .clone()
     }
 
+    fn default_unix_ts() -> bool {
+        *default_unix_ts_cell()
+            .get_or_init(|| Mutex::new(false))
+            .lock()
+            .unwrap()
+    }
+
     fn set_default_path(path: Option<String>) {
         let cell = default_path_cell().get_or_init(|| Mutex::new(None));
         *cell.lock().unwrap() = path;
+    }
+
+    fn set_default_unix_ts(unix_ts: bool) {
+        let cell = default_unix_ts_cell().get_or_init(|| Mutex::new(false));
+        *cell.lock().unwrap() = unix_ts;
     }
 
     fn shared_writer(path: Option<String>) -> Arc<SharedWriter> {
@@ -492,7 +523,7 @@ mod python {
             }
         }
 
-        let writer = Arc::new(SharedWriter::new(path));
+        let writer = Arc::new(SharedWriter::new(path, default_unix_ts()));
         map.insert(key, Arc::downgrade(&writer));
         writer
     }
@@ -544,7 +575,7 @@ mod python {
     #[pyclass]
     pub struct PyLogger {
         writer: Arc<SharedWriter>,
-        name: Arc<str>,
+        name: Option<Arc<str>>,
         level: AtomicU8,
     }
 
@@ -552,10 +583,10 @@ mod python {
     impl PyLogger {
         #[new]
         #[pyo3(signature = (name, path=None, level=PyLevel::Info))]
-        fn new(name: String, path: Option<String>, level: PyLevel) -> PyResult<Self> {
+        fn new(name: Option<String>, path: Option<String>, level: PyLevel) -> PyResult<Self> {
             Ok(PyLogger {
                 writer: shared_writer(path),
-                name: Arc::from(name),
+                name: name.map(Arc::from),
                 level: AtomicU8::new(level_to_u8(level.into())),
             })
         }
@@ -595,7 +626,7 @@ mod python {
             if level_to_u8(level) <= max_level {
                 let entry = LogEntry {
                     ts: cached_timestamp(),
-                    name: Arc::clone(&self.name),
+                    name: self.name.as_ref().map(Arc::clone),
                     level,
                     msg: LogMessage::Heap(message.to_owned()),
                 };
@@ -608,18 +639,19 @@ mod python {
     #[pyo3(name = "_logger")]
     pub fn logger_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
         #[pyfunction]
-        #[pyo3(signature = (path=None))]
-        fn basic_config(path: Option<String>) -> PyResult<()> {
+        #[pyo3(signature = (path=None, unix_ts=false))]
+        fn basic_config(path: Option<String>, unix_ts: bool) -> PyResult<()> {
             set_default_path(path);
+            set_default_unix_ts(unix_ts);
             Ok(())
         }
 
         #[pyfunction]
         #[pyo3(signature = (name, level=PyLevel::Info))]
-        fn get_logger(name: String, level: PyLevel) -> PyResult<PyLogger> {
+        fn get_logger(name: Option<String>, level: PyLevel) -> PyResult<PyLogger> {
             Ok(PyLogger {
                 writer: shared_writer(default_path()),
-                name: Arc::from(name),
+                name: name.map(Arc::from),
                 level: AtomicU8::new(level_to_u8(level.into())),
             })
         }

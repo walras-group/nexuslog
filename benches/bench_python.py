@@ -53,11 +53,11 @@ def bench_python_logging(log_file: str) -> float:
     return elapsed
 
 
-def bench_rust_logger(log_file: str) -> float:
+def bench_rust_logger(log_file: str, unix_ts: bool) -> float:
     """Benchmark NexusLogger."""
     import nexuslog as logging
 
-    logging.basicConfig(log_file, level=logging.Level.Info)
+    logging.basicConfig(log_file, level=logging.Level.Info, unix_ts=unix_ts)
     log = logging.getLogger("bench")
 
     start = time.perf_counter()
@@ -84,13 +84,21 @@ def main():
         pico_time = bench_picologging(pico_log)
         pico_size = os.path.getsize(pico_log)
 
-        # Benchmark NexusLogger
+        # Benchmark NexusLogger (formatted timestamp)
         # Note: NexusLogger adds date suffix, so we use a prefix
         rust_log_prefix = os.path.join(tmpdir, "rust")
-        rust_time = bench_rust_logger(rust_log_prefix)
+        rust_time = bench_rust_logger(rust_log_prefix, unix_ts=False)
         # Find the actual log file (has date suffix)
         rust_files = [f for f in os.listdir(tmpdir) if f.startswith("rust")]
         rust_size = sum(os.path.getsize(os.path.join(tmpdir, f)) for f in rust_files)
+
+        # Benchmark NexusLogger (unix timestamp)
+        rust_unix_log_prefix = os.path.join(tmpdir, "rust_unix")
+        rust_unix_time = bench_rust_logger(rust_unix_log_prefix, unix_ts=True)
+        rust_unix_files = [f for f in os.listdir(tmpdir) if f.startswith("rust_unix")]
+        rust_unix_size = sum(
+            os.path.getsize(os.path.join(tmpdir, f)) for f in rust_unix_files
+        )
 
         # Results
         print(f"{'Logger':<20} {'Time (s)':<12} {'Msgs/sec':<15} {'Log size':<12}")
@@ -105,9 +113,21 @@ def main():
         rust_rate = N_MESSAGES / rust_time
         print(f"{'NexusLogger':<20} {rust_time:<12.3f} {rust_rate:<15,.0f} {rust_size:,} bytes")
 
+        rust_unix_rate = N_MESSAGES / rust_unix_time
+        print(
+            f"{'NexusLogger unix_ts':<20} {rust_unix_time:<12.3f} "
+            f"{rust_unix_rate:<15,.0f} {rust_unix_size:,} bytes"
+        )
+
         print("-" * 60)
         print(f"\nNexusLogger is {py_time / rust_time:.2f}x faster than Python logging")
         print(f"NexusLogger is {pico_time / rust_time:.2f}x faster than picologging")
+        print(
+            f"NexusLogger unix_ts is {py_time / rust_unix_time:.2f}x faster than Python logging"
+        )
+        print(
+            f"NexusLogger unix_ts is {pico_time / rust_unix_time:.2f}x faster than picologging"
+        )
 
 
 if __name__ == "__main__":

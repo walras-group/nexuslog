@@ -56,7 +56,7 @@ logging.ERROR
 ### 模块级函数
 
 ```python
-logging.basicConfig(filename=None, level=logging.INFO)
+logging.basicConfig(filename=None, level=logging.INFO, unix_ts=False)
 logging.trace(message)
 logging.debug(message)
 logging.info(message)

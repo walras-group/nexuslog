@@ -1,13 +1,13 @@
 import nexuslog as logging
 import time
 
-logging.basicConfig(level=logging.Level.Info)
+logging.basicConfig(level=logging.INFO, unix_ts=True)
 
 class A:
-    log = logging.getLogger("A")
+    log = logging.getLogger()
 
 class B:
-    log = logging.getLogger("B")
+    log = logging.getLogger()
 
 def main():
     a = A()

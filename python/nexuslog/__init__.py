@@ -41,32 +41,35 @@ _DEFAULT_LEVEL = INFO
 _root_logger: "Logger | None" = None
 
 
-def basicConfig(filename: str | None = None, level: Level = INFO) -> None:
+def basicConfig(
+    filename: str | None = None, level: Level = INFO, unix_ts: bool = False
+) -> None:
     """Configure the root logger.
 
     Args:
         filename: Optional file path for log output. If None, logs to stdout.
         level: Minimum log level to record. Default is INFO.
+        unix_ts: If True, emit unix timestamps instead of formatted local time.
     """
     global _DEFAULT_LEVEL, _root_logger
-    _basic_config(filename)
+    _basic_config(filename, unix_ts)
     _DEFAULT_LEVEL = level
     # Create root logger
-    _root_logger = getLogger("root", level)
+    _root_logger = getLogger(None, level)
 
 
 class Logger:
     """Fast async logger instance.
 
     Args:
-        name: Logger name, shown in log output as [time name LEVEL]
+        name: Logger name. If None, the name field is omitted in log output.
         path: Optional file path prefix for log files. If None, logs to stdout.
               Log files are rotated daily with format: {path}_YYYYMMDD.log
         level: Minimum log level to record. Default is Level.Info.
     """
 
     def __init__(
-        self, name: str, path: str | None = None, level: Level = Level.Info
+        self, name: str | None, path: str | None = None, level: Level = Level.Info
     ) -> None:
         self._logger = _PyLogger(name, path, level)
 
@@ -95,7 +98,7 @@ class Logger:
         self._logger.error(message)
 
 
-def getLogger(name: str, level: Level | None = None) -> Logger:
+def getLogger(name: str | None = None, level: Level | None = None) -> Logger:
     """Get a logger that shares a writer with the default path."""
     if level is None:
         level = _DEFAULT_LEVEL
@@ -108,7 +111,7 @@ def _get_root_logger() -> Logger:
     """Get or create the root logger."""
     global _root_logger
     if _root_logger is None:
-        _root_logger = getLogger("root", _DEFAULT_LEVEL)
+        _root_logger = getLogger(None, _DEFAULT_LEVEL)
     return _root_logger
 
 
