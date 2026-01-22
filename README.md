@@ -11,16 +11,21 @@ High-performance async logging library, compatible with Python standard logging 
 ## Benchmark
 
 ```
+Benchmarking with 1,000,000 log messages
+
 ------------------------------------------------------------
-Logger               Time (s)     Msgs/sec        Log size
+Logger               Time (s)     Msgs/sec        Log size    
 ------------------------------------------------------------
-Python logging       5.379        185,908         81,888,890 bytes
-picologging          2.024        494,168         78,888,882 bytes
-NexusLogger          0.193        5,192,770       93,317,288 bytes
+Python logging       5.157        193,896         81,888,890 bytes
+picologging          1.893        528,323         78,888,882 bytes
+NexusLogger          0.135        7,426,915       97,888,890 bytes
+NexusLogger unix_ts  0.130        7,707,092       82,888,890 bytes
 ------------------------------------------------------------
 
-NexusLogger is 27.93x faster than Python logging
-NexusLogger is 10.51x faster than picologging
+NexusLogger is 38.30x faster than Python logging
+NexusLogger is 14.06x faster than picologging
+NexusLogger unix_ts is 39.75x faster than Python logging
+NexusLogger unix_ts is 14.59x faster than picologging
 ```
 
 ## Installation
