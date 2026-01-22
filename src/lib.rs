@@ -14,10 +14,13 @@ pub use log::{debug, error, info, trace, warn};
 pub type Level = LevelFilter;
 const CHANNEL_CAPACITY: usize = 65_536;
 const INLINE_MSG_CAP: usize = 256;
+const ENTRY_BATCH_SIZE: usize = 32;
 
 thread_local! {
     static TS_CACHE: RefCell<ThreadTimestampCache> =
         RefCell::new(ThreadTimestampCache::new());
+    static ENTRY_BUFFER: RefCell<Vec<LogEntry>> =
+        RefCell::new(Vec::with_capacity(ENTRY_BATCH_SIZE));
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -108,7 +111,7 @@ impl ThreadTimestampCache {
     }
 }
 enum Action {
-    Write(LogEntry),
+    WriteBatch(Vec<LogEntry>),
     Flush,
     Exit,
 }
@@ -172,10 +175,11 @@ impl log::Log for Logger {
             msg,
         };
 
-        let _ = self.tx.send(Action::Write(entry));
+        push_entry(&self.tx, entry);
     }
 
     fn flush(&self) {
+        flush_thread_buffer(&self.tx);
         let _ = self.tx.send(Action::Flush);
     }
 }
@@ -299,44 +303,10 @@ fn worker<P: ToString + Send>(mut ctx: Context<P>) -> Result<(), std::io::Error>
     let mut cache = TimestampCache::new();
     loop {
         match ctx.rx.recv_timeout(timeout) {
-            Ok(Action::Write(entry)) => {
-                let ts = entry.ts();
-                cache.update(ts.secs);
-
-                if cache.date != ctx.date {
-                    ctx.date = cache.date;
-                    target = rotate(&ctx)?;
+            Ok(Action::WriteBatch(entries)) => {
+                for entry in entries {
+                    write_entry(&mut target, &mut ctx, &mut cache, entry)?;
                 }
-
-                let level = match entry.level() {
-                    log::Level::Trace => "trace",
-                    log::Level::Debug => "debug",
-                    log::Level::Info => "info",
-                    log::Level::Warn => "warn",
-                    log::Level::Error => "error",
-                };
-
-                // Build the line with cached timestamp parts to reduce formatting per entry.
-                let mut line = String::with_capacity(entry.msg().len() + 128);
-                if ctx.unix_ts {
-                    line.push_str("time=");
-                    use std::fmt::Write as _;
-                    write!(&mut line, "{}.{:06} level={}", ts.secs, ts.micros, level).unwrap();
-                } else {
-                    line.push_str(&cache.time_prefix);
-                    use std::fmt::Write as _;
-                    write!(&mut line, "{:06}", ts.micros).unwrap();
-                    line.push_str(&cache.offset_prefix);
-                    line.push_str(level);
-                }
-                if let Some(name) = entry.name() {
-                    line.push_str(" name=");
-                    line.push_str(name);
-                }
-                line.push_str(" msg=\"");
-                line.push_str(entry.msg());
-                line.push_str("\"\n");
-                target.write_all(line.as_bytes())?;
             }
             Ok(Action::Flush) => {
                 target.flush()?;
@@ -356,6 +326,70 @@ fn worker<P: ToString + Send>(mut ctx: Context<P>) -> Result<(), std::io::Error>
     }
 
     Ok(())
+}
+
+fn write_entry<P: ToString + Send>(
+    target: &mut BufWriter<Box<dyn Write>>,
+    ctx: &mut Context<P>,
+    cache: &mut TimestampCache,
+    entry: LogEntry,
+) -> Result<(), std::io::Error> {
+    let ts = entry.ts();
+    cache.update(ts.secs);
+
+    if cache.date != ctx.date {
+        ctx.date = cache.date;
+        *target = rotate(ctx)?;
+    }
+
+    let level = match entry.level() {
+        log::Level::Trace => "trace",
+        log::Level::Debug => "debug",
+        log::Level::Info => "info",
+        log::Level::Warn => "warn",
+        log::Level::Error => "error",
+    };
+
+    if ctx.unix_ts {
+        write!(target, "time={}.{:06} level={}", ts.secs, ts.micros, level)?;
+    } else {
+        target.write_all(cache.time_prefix.as_bytes())?;
+        write!(target, "{:06}", ts.micros)?;
+        target.write_all(cache.offset_prefix.as_bytes())?;
+        target.write_all(level.as_bytes())?;
+    }
+
+    if let Some(name) = entry.name() {
+        target.write_all(b" name=")?;
+        target.write_all(name.as_bytes())?;
+    }
+    target.write_all(b" msg=\"")?;
+    target.write_all(entry.msg().as_bytes())?;
+    target.write_all(b"\"\n")?;
+    Ok(())
+}
+
+fn push_entry(tx: &Sender<Action>, entry: LogEntry) {
+    ENTRY_BUFFER.with(|buffer| {
+        let mut buffer = buffer.borrow_mut();
+        buffer.push(entry);
+        if buffer.len() >= ENTRY_BATCH_SIZE {
+            let mut batch = Vec::with_capacity(ENTRY_BATCH_SIZE);
+            std::mem::swap(&mut *buffer, &mut batch);
+            let _ = tx.send(Action::WriteBatch(batch));
+        }
+    });
+}
+
+fn flush_thread_buffer(tx: &Sender<Action>) {
+    ENTRY_BUFFER.with(|buffer| {
+        let mut buffer = buffer.borrow_mut();
+        if !buffer.is_empty() {
+            let mut batch = Vec::with_capacity(buffer.len());
+            std::mem::swap(&mut *buffer, &mut batch);
+            let _ = tx.send(Action::WriteBatch(batch));
+        }
+    });
 }
 
 pub fn init<P: ToString + Send + 'static>(name: &str, path: Option<P>, level: Level) -> Handle {
@@ -391,7 +425,10 @@ pub fn init<P: ToString + Send + 'static>(name: &str, path: Option<P>, level: Le
 // Python bindings - instance-based logger
 #[cfg(feature = "python")]
 mod python {
-    use super::{cached_timestamp, worker, Action, Context, LogEntry, LogMessage, LevelFilter, CHANNEL_CAPACITY};
+    use super::{
+        cached_timestamp, flush_thread_buffer, push_entry, worker, Action, Context, LogEntry,
+        LogMessage, LevelFilter, CHANNEL_CAPACITY, INLINE_MSG_CAP,
+    };
     use chrono::Local;
     use crossbeam_channel::Sender;
     use pyo3::prelude::*;
@@ -400,6 +437,7 @@ mod python {
     use std::sync::atomic::{AtomicU8, Ordering};
     use std::sync::{Arc, Mutex, OnceLock, Weak};
     use std::thread::JoinHandle;
+    use arrayvec::ArrayString;
 
     #[derive(Clone, Eq)]
     enum PathKey {
@@ -592,6 +630,7 @@ mod python {
         }
 
         fn shutdown(&self) {
+            flush_thread_buffer(&self.writer.tx);
             let _ = self.writer.tx.send(Action::Flush);
             if Arc::strong_count(&self.writer) == 1 {
                 self.writer.stop();
@@ -624,13 +663,21 @@ mod python {
         fn log_internal(&self, level: log::Level, message: &str) {
             let max_level = self.level.load(Ordering::Relaxed);
             if level_to_u8(level) <= max_level {
+                let msg = {
+                    let mut inline = ArrayString::<INLINE_MSG_CAP>::new();
+                    if inline.try_push_str(message).is_ok() {
+                        LogMessage::Inline(inline)
+                    } else {
+                        LogMessage::Heap(message.to_owned())
+                    }
+                };
                 let entry = LogEntry {
                     ts: cached_timestamp(),
                     name: self.name.as_ref().map(Arc::clone),
                     level,
-                    msg: LogMessage::Heap(message.to_owned()),
+                    msg,
                 };
-                let _ = self.writer.tx.send(Action::Write(entry));
+                push_entry(&self.writer.tx, entry);
             }
         }
     }
