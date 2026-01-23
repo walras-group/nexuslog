@@ -14,13 +14,13 @@ pub use log::{debug, error, info, trace, warn};
 pub type Level = LevelFilter;
 const CHANNEL_CAPACITY: usize = 65_536;
 const INLINE_MSG_CAP: usize = 256;
-const ENTRY_BATCH_SIZE: usize = 32;
+const DEFAULT_BATCH_SIZE: usize = 32;
 
 thread_local! {
     static TS_CACHE: RefCell<ThreadTimestampCache> =
         RefCell::new(ThreadTimestampCache::new());
     static ENTRY_BUFFER: RefCell<Vec<LogEntry>> =
-        RefCell::new(Vec::with_capacity(ENTRY_BATCH_SIZE));
+        RefCell::new(Vec::with_capacity(DEFAULT_BATCH_SIZE));
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -392,8 +392,8 @@ fn push_entry(tx: &Sender<Action>, entry: LogEntry) {
     ENTRY_BUFFER.with(|buffer| {
         let mut buffer = buffer.borrow_mut();
         buffer.push(entry);
-        if buffer.len() >= ENTRY_BATCH_SIZE {
-            let mut batch = Vec::with_capacity(ENTRY_BATCH_SIZE);
+        if buffer.len() >= DEFAULT_BATCH_SIZE {
+            let mut batch = Vec::with_capacity(DEFAULT_BATCH_SIZE);
             std::mem::swap(&mut *buffer, &mut batch);
             let _ = tx.send(Action::WriteBatch(batch));
         }
@@ -445,18 +445,34 @@ pub fn init<P: ToString + Send + 'static>(name: &str, path: Option<P>, level: Le
 #[cfg(feature = "python")]
 mod python {
     use super::{
-        cached_timestamp, flush_thread_buffer, push_entry, worker, Action, Context, LogEntry,
-        LogMessage, LevelFilter, CHANNEL_CAPACITY, INLINE_MSG_CAP,
+        cached_timestamp, flush_thread_buffer, worker, Action, Context, LogEntry,
+        LogMessage, LevelFilter, CHANNEL_CAPACITY, DEFAULT_BATCH_SIZE, INLINE_MSG_CAP,
     };
     use chrono::Local;
     use crossbeam_channel::Sender;
     use pyo3::prelude::*;
     use std::collections::HashMap;
     use std::hash::{Hash, Hasher};
-    use std::sync::atomic::{AtomicU8, Ordering};
+    use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, OnceLock, Weak};
     use std::thread::JoinHandle;
     use arrayvec::ArrayString;
+
+    static BATCH_SIZE: AtomicUsize = AtomicUsize::new(DEFAULT_BATCH_SIZE);
+
+    fn push_entry(tx: &Sender<Action>, entry: LogEntry) {
+        use super::ENTRY_BUFFER;
+        let batch_size = BATCH_SIZE.load(Ordering::Relaxed);
+        ENTRY_BUFFER.with(|buffer| {
+            let mut buffer = buffer.borrow_mut();
+            buffer.push(entry);
+            if buffer.len() >= batch_size {
+                let mut batch = Vec::with_capacity(batch_size);
+                std::mem::swap(&mut *buffer, &mut batch);
+                let _ = tx.send(Action::WriteBatch(batch));
+            }
+        });
+    }
 
     #[derive(Clone, Eq)]
     enum PathKey {
@@ -705,10 +721,13 @@ mod python {
     #[pyo3(name = "_logger")]
     pub fn logger_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
         #[pyfunction]
-        #[pyo3(signature = (path=None, unix_ts=false))]
-        fn basic_config(path: Option<String>, unix_ts: bool) -> PyResult<()> {
+        #[pyo3(signature = (path=None, unix_ts=false, batch_size=None))]
+        fn basic_config(path: Option<String>, unix_ts: bool, batch_size: Option<usize>) -> PyResult<()> {
             set_default_path(path);
             set_default_unix_ts(unix_ts);
+            if let Some(size) = batch_size {
+                BATCH_SIZE.store(size.max(1), Ordering::Relaxed);
+            }
             Ok(())
         }
 

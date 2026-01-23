@@ -43,7 +43,10 @@ _root_logger: "Logger | None" = None
 
 
 def basicConfig(
-    filename: str | None = None, level: Level = INFO, unix_ts: bool = False
+    filename: str | None = None,
+    level: Level = INFO,
+    unix_ts: bool = False,
+    batch_size: int | None = None,
 ) -> None:
     """Configure the root logger.
 
@@ -51,9 +54,11 @@ def basicConfig(
         filename: Optional file path for log output. If None, logs to stdout.
         level: Minimum log level to record. Default is INFO.
         unix_ts: If True, emit unix timestamps instead of formatted local time.
+        batch_size: Number of log entries to batch before writing. Default is 32.
+                    Set to 1 to write immediately (lower performance, no data loss on crash).
     """
     global _DEFAULT_LEVEL, _root_logger
-    _basic_config(filename, unix_ts)
+    _basic_config(filename, unix_ts, batch_size)
     _DEFAULT_LEVEL = level
     # Create root logger
     _root_logger = getLogger(None, level)

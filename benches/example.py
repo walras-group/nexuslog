@@ -13,11 +13,11 @@ def main():
     a = A()
     b = B()
 
-    for i in range(1000):
+    for i in range(16):
         a.log.info(f"Message {i} from A")
         b.log.debug(f"Message {i} from B")
 
-    logging.shutdown()
+    # logging.shutdown()
 
 if __name__ == "__main__":
     main()
