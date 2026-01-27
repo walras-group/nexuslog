@@ -72,6 +72,10 @@ logging.ERROR
 
 ```python
 logging.basicConfig(filename=None, level=logging.INFO, unix_ts=False)
+logging.basicConfig(
+    level=logging.INFO,
+    name_levels={"db": logging.DEBUG, "http.client": logging.WARNING},
+)
 logging.trace(message)
 logging.debug(message)
 logging.info(message)

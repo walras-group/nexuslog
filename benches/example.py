@@ -1,7 +1,6 @@
 import nexuslog as logging
 import time
 
-logging.basicConfig(level=logging.DEBUG, unix_ts=False, filename='tmp/app.log')
 
 class A:
     log = logging.getLogger()
@@ -20,4 +19,6 @@ def main():
     # logging.shutdown()
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, unix_ts=False, filename='tmp/app.log')
+
     main()
